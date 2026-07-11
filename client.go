@@ -886,20 +886,20 @@ func (cli *Client) sendNodeAndGetData(ctx context.Context, node waBinary.Node) (
 	}
 
 	cli.sendLog.Debugf("%s", node.XMLString())
-	
+
 	// 🔒 FIX: Log quando envia frame (INFO para garantir que apareça)
 	if node.Tag == "iq" {
 		if id, ok := node.Attrs["id"].(string); ok {
 			cli.Log.Infof("sendNodeAndGetData: sending IQ frame, id=%s, xmlns=%s", id, node.Attrs["xmlns"])
 		}
 	}
-	
+
 	err = sock.SendFrame(ctx, payload)
 	if err != nil {
 		cli.Log.Warnf("sendNodeAndGetData: SendFrame failed: %v", err)
 		return nil, err
 	}
-	
+
 	cli.Log.Infof("sendNodeAndGetData: frame sent successfully")
 	return payload, nil
 }
@@ -983,6 +983,7 @@ func (cli *Client) ParseWebMessage(chatJID types.JID, webMsg *waWeb.WebMessageIn
 	if evt.Message.GetProtocolMessage().GetType() == waE2E.ProtocolMessage_MESSAGE_EDIT {
 		evt.Info.ID = evt.Message.GetProtocolMessage().GetKey().GetID()
 		evt.Message = evt.Message.GetProtocolMessage().GetEditedMessage()
+		evt.IsEdit = true
 	}
 	return evt, nil
 }

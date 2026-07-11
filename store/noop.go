@@ -208,6 +208,10 @@ func (n *NoopStore) GetChatSettings(ctx context.Context, chat types.JID) (types.
 	return types.LocalChatSettings{}, n.Error
 }
 
+func (n *NoopStore) GetAllChatSettings(ctx context.Context) (map[types.JID]types.LocalChatSettings, error) {
+	return nil, n.Error
+}
+
 func (n *NoopStore) PutMessageSecrets(ctx context.Context, inserts []MessageSecretInsert) error {
 	return n.Error
 }

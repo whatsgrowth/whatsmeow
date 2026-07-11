@@ -821,6 +821,13 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 			ok = cli.handlePlaceholderResendResponse(peerResp) && ok
 		case waE2E.PeerDataOperationRequestType_COMPANION_SYNCD_SNAPSHOT_FATAL_RECOVERY:
 			ok = cli.handleAppStateRecovery(ctx, peerResp.GetStanzaID(), peerResp.GetPeerDataOperationResult()) && ok
+		case waE2E.PeerDataOperationRequestType_FULL_HISTORY_SYNC_ON_DEMAND:
+			for _, result := range peerResp.GetPeerDataOperationResult() {
+				resp := result.GetFullHistorySyncOnDemandRequestResponse()
+				if resp != nil {
+					cli.Log.Infof("Full history sync on-demand response: %s", resp.GetResponseCode().String())
+				}
+			}
 		}
 	}
 
@@ -874,6 +881,7 @@ func (cli *Client) storeMessageSecret(ctx context.Context, info *types.MessageIn
 func (cli *Client) storeHistoricalMessageSecrets(ctx context.Context, conversations []*waHistorySync.Conversation) {
 	var secrets []store.MessageSecretInsert
 	var privacyTokens []store.PrivacyToken
+	var chatPinSettingsStored int
 	ownID := cli.getOwnID().ToNonAD()
 	if ownID.IsEmpty() {
 		return
@@ -882,6 +890,14 @@ func (cli *Client) storeHistoricalMessageSecrets(ctx context.Context, conversati
 		chatJID, _ := types.ParseJID(conv.GetID())
 		if chatJID.IsEmpty() {
 			continue
+		}
+		if conv.Pinned != nil && cli.Store.ChatSettings != nil {
+			err := cli.Store.ChatSettings.PutPinned(ctx, chatJID, conv.GetPinned() > 0)
+			if err != nil {
+				cli.Log.Errorf("Failed to store pinned chat setting from history sync: %v", err)
+			} else {
+				chatPinSettingsStored++
+			}
 		}
 		if chatJID.Server == types.DefaultUserServer && conv.GetTcToken() != nil {
 			ts := conv.GetTcTokenSenderTimestamp()
@@ -936,6 +952,9 @@ func (cli *Client) storeHistoricalMessageSecrets(ctx context.Context, conversati
 		} else {
 			cli.Log.Infof("Stored %d privacy tokens from history sync", len(privacyTokens))
 		}
+	}
+	if chatPinSettingsStored > 0 {
+		cli.Log.Infof("Stored %d pinned chat settings from history sync", chatPinSettingsStored)
 	}
 }
 

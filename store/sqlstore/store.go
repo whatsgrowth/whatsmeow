@@ -831,6 +831,9 @@ const (
 	getChatSettingsQuery = `
 		SELECT muted_until, pinned, archived FROM whatsmeow_chat_settings WHERE our_jid=$1 AND chat_jid=$2
 	`
+	getAllChatSettingsQuery = `
+		SELECT chat_jid, muted_until, pinned, archived FROM whatsmeow_chat_settings WHERE our_jid=$1
+	`
 )
 
 func (s *SQLStore) PutMutedUntil(ctx context.Context, chat types.JID, mutedUntil time.Time) error {
@@ -870,6 +873,36 @@ func (s *SQLStore) GetChatSettings(ctx context.Context, chat types.JID) (setting
 		settings.MutedUntil = time.Unix(mutedUntil, 0)
 	}
 	return
+}
+
+func (s *SQLStore) GetAllChatSettings(ctx context.Context) (map[types.JID]types.LocalChatSettings, error) {
+	rows, err := s.db.Query(ctx, getAllChatSettingsQuery, s.JID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	output := make(map[types.JID]types.LocalChatSettings)
+	for rows.Next() {
+		var chatJIDString string
+		var mutedUntil int64
+		var settings types.LocalChatSettings
+		if err = rows.Scan(&chatJIDString, &mutedUntil, &settings.Pinned, &settings.Archived); err != nil {
+			return nil, err
+		}
+		chatJID, err := types.ParseJID(chatJIDString)
+		if err != nil {
+			return nil, errors.New("failed to parse stored chat settings JID")
+		}
+		settings.Found = true
+		if mutedUntil < 0 {
+			settings.MutedUntil = store.MutedForever
+		} else if mutedUntil > 0 {
+			settings.MutedUntil = time.Unix(mutedUntil, 0)
+		}
+		output[chatJID] = settings
+	}
+	return output, rows.Err()
 }
 
 const (

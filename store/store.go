@@ -116,6 +116,7 @@ type ChatSettingsStore interface {
 	PutPinned(ctx context.Context, chat types.JID, pinned bool) error
 	PutArchived(ctx context.Context, chat types.JID, archived bool) error
 	GetChatSettings(ctx context.Context, chat types.JID) (types.LocalChatSettings, error)
+	GetAllChatSettings(ctx context.Context) (map[types.JID]types.LocalChatSettings, error)
 }
 
 type DeviceContainer interface {
