@@ -358,6 +358,31 @@ func BuildDeleteChat(target types.JID, lastMessageTimestamp time.Time, lastMessa
 	}
 }
 
+// BuildClearChat builds an app state patch for clearing a chat.
+func BuildClearChat(target types.JID, lastMessageTimestamp time.Time, lastMessageKey *waCommon.MessageKey, keepStarred, deleteMedia bool) PatchInfo {
+	keepStarredInt := "1"
+	if keepStarred {
+		keepStarredInt = "0"
+	}
+	deleteMediaInt := "0"
+	if deleteMedia {
+		deleteMediaInt = "1"
+	}
+
+	return PatchInfo{
+		Type: WAPatchRegularHigh,
+		Mutations: []MutationInfo{{
+			Index:   []string{IndexClearChat, target.String(), keepStarredInt, deleteMediaInt},
+			Version: 6,
+			Value: &waSyncAction.SyncActionValue{
+				ClearChatAction: &waSyncAction.ClearChatAction{
+					MessageRange: newMessageRange(lastMessageTimestamp, lastMessageKey),
+				},
+			},
+		}},
+	}
+}
+
 func newMessageRange(lastMessageTimestamp time.Time, lastMessageKey *waCommon.MessageKey) *waSyncAction.SyncActionMessageRange {
 	if lastMessageTimestamp.IsZero() {
 		lastMessageTimestamp = time.Now()
