@@ -610,8 +610,7 @@ func (cli *Client) GetProfilePictureInfo(ctx context.Context, jid types.JID, par
 			Content: pictureContent,
 		}}
 	}
-	// 🔒 FIX: Log da requisição antes de enviar (INFO para garantir que apareça)
-	cli.Log.Infof("Sending GetProfilePictureInfo IQ: namespace=%s, to=%s, target=%s", namespace, to, target)
+	cli.Log.Infof("profile_photo.iq.started")
 
 	resp, err := cli.sendIQ(ctx, infoQuery{
 		Namespace: namespace,
@@ -621,11 +620,10 @@ func (cli *Client) GetProfilePictureInfo(ctx context.Context, jid types.JID, par
 		Content:   content,
 	})
 
-	// 🔒 FIX: Log do resultado
 	if err != nil {
-		cli.Log.Warnf("GetProfilePictureInfo IQ failed: %v", err)
+		cli.Log.Warnf("profile_photo.iq.failed")
 	} else {
-		cli.Log.Infof("GetProfilePictureInfo IQ succeeded")
+		cli.Log.Infof("profile_photo.iq.completed")
 	}
 
 	if errors.Is(err, ErrIQNotAuthorized) {

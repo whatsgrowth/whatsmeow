@@ -40,6 +40,10 @@ func (cli *Client) FetchAppState(ctx context.Context, name appstate.WAPatchName,
 }
 
 func (cli *Client) fetchAppState(ctx context.Context, name appstate.WAPatchName, fullSync, onlyIfNotSynced bool) ([]any, error) {
+	return cli.fetchAppStateWithEventCollection(ctx, name, fullSync, onlyIfNotSynced, cli.EmitAppStateEventsOnFullSync)
+}
+
+func (cli *Client) fetchAppStateWithEventCollection(ctx context.Context, name appstate.WAPatchName, fullSync, onlyIfNotSynced, collectFullSyncEvents bool) ([]any, error) {
 	if cli == nil {
 		return nil, ErrClientIsNil
 	}
@@ -67,7 +71,7 @@ func (cli *Client) fetchAppState(ctx context.Context, name appstate.WAPatchName,
 	wantSnapshot := fullSync
 	var eventsToDispatch []any
 	eventsToDispatchPtr := &eventsToDispatch
-	if fullSync && !cli.EmitAppStateEventsOnFullSync {
+	if fullSync && !collectFullSyncEvents {
 		eventsToDispatchPtr = nil
 	}
 	for hasMore {

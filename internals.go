@@ -47,6 +47,12 @@ func (int *DangerousInternalClient) FetchAppState(ctx context.Context, name apps
 	return int.c.fetchAppState(ctx, name, fullSync, onlyIfNotSynced)
 }
 
+// CollectAppStateEvents fetches app state and explicitly collects full-sync
+// events without mutating the client's process-wide emission flag.
+func (int *DangerousInternalClient) CollectAppStateEvents(ctx context.Context, name appstate.WAPatchName, fullSync, onlyIfNotSynced bool) ([]any, error) {
+	return int.c.fetchAppStateWithEventCollection(ctx, name, fullSync, onlyIfNotSynced, true)
+}
+
 func (int *DangerousInternalClient) HandleAppStateRecovery(ctx context.Context, reqID types.MessageID, result []*waE2E.PeerDataOperationRequestResponseMessage_PeerDataOperationResult) bool {
 	return int.c.handleAppStateRecovery(ctx, reqID, result)
 }
