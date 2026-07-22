@@ -17,8 +17,10 @@ import (
 	"io"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"go.mau.fi/libsignal/groups"
 	"go.mau.fi/libsignal/protocol"
@@ -39,6 +41,12 @@ import (
 )
 
 var pbSerializer = store.SignalProtobufSerializer
+
+type historySyncNotificationItem struct {
+	notification *waE2E.HistorySyncNotification
+	queuedAt     time.Time
+	traceID      string
+}
 
 func (cli *Client) handleEncryptedMessage(ctx context.Context, node *waBinary.Node) {
 	info, err := cli.parseMessageInfo(node)
@@ -676,15 +684,47 @@ func (cli *Client) handleHistorySyncNotificationLoop() {
 	ctx := cli.BackgroundEventCtx
 	for {
 		select {
-		case notif := <-cli.historySyncNotifications:
-			blob, err := cli.DownloadHistorySync(ctx, notif, false)
+		case item := <-cli.historySyncNotifications:
+			processingStartedAt := time.Now()
+			cli.Log.Infof(
+				"history_sync stage=dequeued trace_id=%s queue_wait_ms=%d queue_depth=%d sync_type=%s chunk=%d progress=%d",
+				item.traceID,
+				processingStartedAt.Sub(item.queuedAt).Milliseconds(),
+				len(cli.historySyncNotifications),
+				item.notification.GetSyncType(),
+				item.notification.GetChunkOrder(),
+				item.notification.GetProgress(),
+			)
+			blob, err := cli.downloadHistorySync(ctx, item.notification, false, item.traceID)
 			if err != nil {
-				cli.Log.Errorf("Failed to download history sync: %v", err)
+				cli.Log.Errorf(
+					"history_sync stage=download_decode_failed trace_id=%s duration_ms=%d reason=%s",
+					item.traceID,
+					time.Since(processingStartedAt).Milliseconds(),
+					classifyHistorySyncProcessingError(err),
+				)
 			} else {
-				cli.dispatchEvent(&events.HistorySync{Data: blob})
-				err = cli.DeleteMedia(ctx, MediaHistory, notif.GetDirectPath(), notif.GetFileEncSHA256(), notif.GetEncHandle())
+				processingFinishedAt := time.Now()
+				cli.dispatchEvent(&events.HistorySync{
+					Data:                 blob,
+					TraceID:              item.traceID,
+					NotificationQueuedAt: item.queuedAt,
+					ProcessingStartedAt:  processingStartedAt,
+					ProcessingFinishedAt: processingFinishedAt,
+				})
+				cli.Log.Infof(
+					"history_sync stage=event_dispatched trace_id=%s processing_ms=%d total_ms=%d conversations=%d sync_type=%s chunk=%d progress=%d",
+					item.traceID,
+					processingFinishedAt.Sub(processingStartedAt).Milliseconds(),
+					processingFinishedAt.Sub(item.queuedAt).Milliseconds(),
+					len(blob.GetConversations()),
+					blob.GetSyncType(),
+					blob.GetChunkOrder(),
+					blob.GetProgress(),
+				)
+				err = cli.DeleteMedia(ctx, MediaHistory, item.notification.GetDirectPath(), item.notification.GetFileEncSHA256(), item.notification.GetEncHandle())
 				if err != nil {
-					cli.Log.Warnf("Failed to delete history sync media from server: %v", err)
+					cli.Log.Warnf("history_sync stage=remote_cleanup_failed trace_id=%s reason=delete_failed", item.traceID)
 				}
 			}
 		case <-time.After(1 * time.Minute):
@@ -698,6 +738,12 @@ func (cli *Client) handleHistorySyncNotificationLoop() {
 // You only need to call this manually if you set [Client.ManualHistorySyncDownload] to true.
 // By default, whatsmeow will call this automatically and dispatch an [events.HistorySync] with the parsed data.
 func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.HistorySyncNotification, synchronousStorage bool) (*waHistorySync.HistorySync, error) {
+	return cli.downloadHistorySync(ctx, notif, synchronousStorage, "")
+}
+
+func (cli *Client) downloadHistorySync(ctx context.Context, notif *waE2E.HistorySyncNotification, synchronousStorage bool, traceID string) (*waHistorySync.HistorySync, error) {
+	totalStartedAt := time.Now()
+	downloadStartedAt := time.Now()
 	var data []byte
 	var err error
 	if notif.InitialHistBootstrapInlinePayload != nil {
@@ -705,13 +751,20 @@ func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.History
 	} else if data, err = cli.Download(ctx, notif); err != nil {
 		return nil, fmt.Errorf("failed to download: %w", err)
 	}
+	logHistorySyncStage(cli, traceID, "blob_downloaded", downloadStartedAt, "compressed_bytes=%d inline=%t", len(data), notif.InitialHistBootstrapInlinePayload != nil)
+	decompressStartedAt := time.Now()
 	var historySync waHistorySync.HistorySync
 	if reader, err := zlib.NewReader(bytes.NewReader(data)); err != nil {
 		return nil, fmt.Errorf("failed to prepare to decompress: %w", err)
 	} else if rawData, err := io.ReadAll(reader); err != nil {
 		return nil, fmt.Errorf("failed to decompress: %w", err)
-	} else if err = proto.Unmarshal(rawData, &historySync); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal: %w", err)
+	} else {
+		logHistorySyncStage(cli, traceID, "blob_decompressed", decompressStartedAt, "uncompressed_bytes=%d", len(rawData))
+		unmarshalStartedAt := time.Now()
+		if err = proto.Unmarshal(rawData, &historySync); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal: %w", err)
+		}
+		logHistorySyncStage(cli, traceID, "blob_unmarshaled", unmarshalStartedAt, "conversations=%d", len(historySync.GetConversations()))
 	}
 	cli.Log.Debugf("Received history sync (type %s, chunk %d, progress %d)", historySync.GetSyncType(), historySync.GetChunkOrder(), historySync.GetProgress())
 	doStorage := func(ctx context.Context) {
@@ -728,11 +781,40 @@ func (cli *Client) DownloadHistorySync(ctx context.Context, notif *waE2E.History
 		}
 	}
 	if synchronousStorage {
+		storageStartedAt := time.Now()
 		doStorage(ctx)
+		logHistorySyncStage(cli, traceID, "internal_storage_completed", storageStartedAt, "synchronous=true")
 	} else {
+		storageStartedAt := time.Now()
 		go doStorage(context.WithoutCancel(ctx))
+		logHistorySyncStage(cli, traceID, "internal_storage_scheduled", storageStartedAt, "synchronous=false")
 	}
+	logHistorySyncStage(cli, traceID, "download_decode_completed", totalStartedAt, "conversations=%d", len(historySync.GetConversations()))
 	return &historySync, nil
+}
+
+func logHistorySyncStage(cli *Client, traceID string, stage string, startedAt time.Time, format string, args ...interface{}) {
+	if traceID == "" {
+		return
+	}
+	details := fmt.Sprintf(format, args...)
+	cli.Log.Infof("history_sync stage=%s trace_id=%s duration_ms=%d %s", stage, traceID, time.Since(startedAt).Milliseconds(), details)
+}
+
+func classifyHistorySyncProcessingError(err error) string {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "failed to download"):
+		return "download_failed"
+	case strings.Contains(message, "failed to prepare to decompress"):
+		return "decompress_prepare_failed"
+	case strings.Contains(message, "failed to decompress"):
+		return "decompress_failed"
+	case strings.Contains(message, "failed to unmarshal"):
+		return "unmarshal_failed"
+	default:
+		return "processing_failed"
+	}
 }
 
 func (cli *Client) handleAppStateSyncKeyShare(ctx context.Context, keys *waE2E.AppStateSyncKeyShare) {
@@ -802,7 +884,24 @@ func (cli *Client) handleProtocolMessage(ctx context.Context, info *types.Messag
 
 	if protoMsg.GetHistorySyncNotification() != nil {
 		if !cli.ManualHistorySyncDownload {
-			cli.historySyncNotifications <- protoMsg.HistorySyncNotification
+			notification := protoMsg.HistorySyncNotification
+			queuedAt := time.Now()
+			traceID := "hs-" + uuid.NewString()
+			enqueueStartedAt := time.Now()
+			cli.historySyncNotifications <- historySyncNotificationItem{
+				notification: notification,
+				queuedAt:     queuedAt,
+				traceID:      traceID,
+			}
+			cli.Log.Infof(
+				"history_sync stage=queued trace_id=%s enqueue_ms=%d queue_depth=%d sync_type=%s chunk=%d progress=%d",
+				traceID,
+				time.Since(enqueueStartedAt).Milliseconds(),
+				len(cli.historySyncNotifications),
+				notification.GetSyncType(),
+				notification.GetChunkOrder(),
+				notification.GetProgress(),
+			)
 			if cli.historySyncHandlerStarted.CompareAndSwap(false, true) {
 				go cli.handleHistorySyncNotificationLoop()
 			}

@@ -243,7 +243,11 @@ type Disconnected struct{}
 
 // HistorySync is emitted when the phone has sent a blob of historical messages.
 type HistorySync struct {
-	Data *waHistorySync.HistorySync
+	Data                 *waHistorySync.HistorySync
+	TraceID              string
+	NotificationQueuedAt time.Time
+	ProcessingStartedAt  time.Time
+	ProcessingFinishedAt time.Time
 }
 
 type DecryptFailMode string
