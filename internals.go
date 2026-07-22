@@ -206,7 +206,7 @@ func (int *DangerousInternalClient) HandleConnectSuccess(ctx context.Context, no
 }
 
 func (int *DangerousInternalClient) DownloadAndDecrypt(ctx context.Context, url string, mediaKey []byte, appInfo MediaType, fileLength int, fileEncSHA256, fileSHA256 []byte) (data []byte, err error) {
-	return int.c.downloadAndDecrypt(ctx, url, mediaKey, appInfo, fileLength, fileEncSHA256, fileSHA256)
+	return int.c.downloadAndDecrypt(ctx, url, mediaKey, appInfo, fileLength, fileEncSHA256, fileSHA256, true)
 }
 
 func (int *DangerousInternalClient) DownloadPossiblyEncryptedMediaWithRetries(ctx context.Context, url string, checksum []byte) (file, mac []byte, err error) {
