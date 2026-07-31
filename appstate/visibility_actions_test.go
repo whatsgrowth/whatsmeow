@@ -94,14 +94,14 @@ func TestVisibilityActionsEncodeDecodeInRegularHigh(t *testing.T) {
 			expectedIndex: []string{IndexDeleteChat, target.String(), "1"},
 		},
 		{
-			name:          "clear chat keeping starred messages without media deletion",
-			patch:         BuildClearChat(target, cutoff, nil, true, false),
-			expectedIndex: []string{IndexClearChat, target.String(), "0", "0"},
+			name:          "clear chat keeping starred messages and deleting media",
+			patch:         BuildClearChat(target, cutoff, nil, true),
+			expectedIndex: []string{IndexClearChat, target.String(), "0", "1"},
 			isClear:       true,
 		},
 		{
 			name:          "clear chat deleting starred messages and media",
-			patch:         BuildClearChat(target, cutoff, nil, false, true),
+			patch:         BuildClearChat(target, cutoff, nil, false),
 			expectedIndex: []string{IndexClearChat, target.String(), "1", "1"},
 			isClear:       true,
 		},

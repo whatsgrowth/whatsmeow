@@ -38,6 +38,87 @@ var (
 	ErrAppStateUpdate = errors.New("server returned error updating app state")
 )
 
+// AppStateUpdateError describes a server rejection without retaining the raw
+// app-state response, which may contain private WhatsApp data.
+type AppStateUpdateError struct {
+	Code   int
+	Phase  AppStateUpdatePhase
+	Detail AppStateUpdateDetail
+}
+
+type AppStateUpdatePhase uint8
+
+const (
+	AppStateUpdatePhaseUnknown AppStateUpdatePhase = iota
+	AppStateUpdatePhaseServerRejected
+	AppStateUpdatePhaseParseConflict
+	AppStateUpdatePhaseApplyConflict
+	AppStateUpdatePhaseRetryRejected
+)
+
+func (phase AppStateUpdatePhase) String() string {
+	switch phase {
+	case AppStateUpdatePhaseServerRejected:
+		return "server_rejected"
+	case AppStateUpdatePhaseParseConflict:
+		return "parse_conflict"
+	case AppStateUpdatePhaseApplyConflict:
+		return "apply_conflict"
+	case AppStateUpdatePhaseRetryRejected:
+		return "retry_rejected"
+	default:
+		return "unknown"
+	}
+}
+
+type AppStateUpdateDetail uint8
+
+const (
+	AppStateUpdateDetailUnknown AppStateUpdateDetail = iota
+	AppStateUpdateDetailMismatchingLTHash
+	AppStateUpdateDetailKeyNotFound
+	AppStateUpdateDetailMismatchingPatchMAC
+	AppStateUpdateDetailMismatchingContentMAC
+	AppStateUpdateDetailMismatchingIndexMAC
+	AppStateUpdateDetailMissingPreviousValue
+	AppStateUpdateDetailEventCollectionFailed
+	AppStateUpdateDetailInternalDecodeError
+)
+
+func (detail AppStateUpdateDetail) String() string {
+	switch detail {
+	case AppStateUpdateDetailMismatchingLTHash:
+		return "mismatching_lthash"
+	case AppStateUpdateDetailKeyNotFound:
+		return "key_not_found"
+	case AppStateUpdateDetailMismatchingPatchMAC:
+		return "mismatching_patch_mac"
+	case AppStateUpdateDetailMismatchingContentMAC:
+		return "mismatching_content_mac"
+	case AppStateUpdateDetailMismatchingIndexMAC:
+		return "mismatching_index_mac"
+	case AppStateUpdateDetailMissingPreviousValue:
+		return "missing_previous_value"
+	case AppStateUpdateDetailEventCollectionFailed:
+		return "event_collection_failed"
+	case AppStateUpdateDetailInternalDecodeError:
+		return "internal_decode_error"
+	default:
+		return "unknown"
+	}
+}
+
+func (err *AppStateUpdateError) Error() string {
+	if err.Code == 0 {
+		return fmt.Sprintf("%s (phase %s)", ErrAppStateUpdate, err.Phase)
+	}
+	return fmt.Sprintf("%s (code %d, phase %s)", ErrAppStateUpdate, err.Code, err.Phase)
+}
+
+func (err *AppStateUpdateError) Unwrap() error {
+	return ErrAppStateUpdate
+}
+
 // Errors that happen while confirming device pairing
 var (
 	ErrPairInvalidDeviceIdentityHMAC = errors.New("invalid device identity HMAC in pair success message")

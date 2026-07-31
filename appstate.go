@@ -26,6 +26,8 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 )
 
+var errAppStateEventCollection = errors.New("app state event collection failed")
+
 // FetchAppState fetches updates to the given type of app state. If fullSync is true, the current
 // cached state will be removed and all app state patches will be re-fetched from the server.
 func (cli *Client) FetchAppState(ctx context.Context, name appstate.WAPatchName, fullSync, onlyIfNotSynced bool) error {
@@ -168,7 +170,10 @@ func (cli *Client) applyAppStatePatches(
 		}
 		return state, fmt.Errorf("failed to decode app state %s patches: %w", name, err)
 	}
-	return newState, cli.collectEventsToDispatch(ctx, name, mutations, fullSync, eventsToDispatch)
+	if err = cli.collectEventsToDispatch(ctx, name, mutations, fullSync, eventsToDispatch); err != nil {
+		return newState, fmt.Errorf("%w: %w", errAppStateEventCollection, err)
+	}
+	return newState, nil
 }
 
 func (cli *Client) collectEventsToDispatch(
@@ -554,18 +559,17 @@ func (cli *Client) sendAppState(ctx context.Context, patch appstate.PatchInfo, a
 	respCollectionAttr := respCollection.AttrGetter()
 	if respCollectionAttr.OptionalString("type") == "error" {
 		errorTag, ok := respCollection.GetOptionalChildByTag("error")
-
-		mainErr := fmt.Errorf("%w: %s", ErrAppStateUpdate, respCollection.XMLString())
-		if ok {
-			mainErr = fmt.Errorf("%w (%s): %s", ErrAppStateUpdate, patch.Type, errorTag.XMLString())
-		}
-		if ok && errorTag.AttrGetter().Int("code") == 409 && allowRetry {
+		mainErr := newAppStateUpdateError(respCollection, errorTag, ok)
+		if mainErr.Code == 409 && allowRetry {
 			zerolog.Ctx(ctx).Warn().Err(mainErr).Msg("Failed to update app state, trying to apply conflicts and retry")
 			var eventsToDispatch []any
 			patches, err := appstate.ParsePatchList(ctx, &respCollection, cli.downloadExternalAppStateBlob)
 			if err != nil {
+				mainErr.Phase = AppStateUpdatePhaseParseConflict
 				return fmt.Errorf("%w (also, parsing patches in the response failed: %w)", mainErr, err)
 			} else if state, err = cli.applyAppStatePatches(ctx, patch.Type, state, patches, false, &eventsToDispatch); err != nil {
+				mainErr.Phase = AppStateUpdatePhaseApplyConflict
+				mainErr.Detail = classifyAppStateApplyFailure(err)
 				return fmt.Errorf("%w (also, applying patches in the response failed: %w)", mainErr, err)
 			} else {
 				zerolog.Ctx(ctx).Debug().Msg("Retrying app state send after applying conflicting patches")
@@ -574,7 +578,8 @@ func (cli *Client) sendAppState(ctx context.Context, patch appstate.PatchInfo, a
 						cli.dispatchEvent(evt)
 					}
 				}()
-				return cli.sendAppState(ctx, patch, false)
+				retryErr := cli.sendAppState(ctx, patch, false)
+				return withAppStateUpdatePhase(retryErr, AppStateUpdatePhaseRetryRejected)
 			}
 		}
 		return mainErr
@@ -590,6 +595,47 @@ func (cli *Client) sendAppState(ctx context.Context, patch appstate.PatchInfo, a
 	}()
 
 	return nil
+}
+
+func newAppStateUpdateError(collection waBinary.Node, errorTag waBinary.Node, hasErrorTag bool) *AppStateUpdateError {
+	code := collection.AttrGetter().OptionalInt("code")
+	if hasErrorTag {
+		if errorCode := errorTag.AttrGetter().OptionalInt("code"); errorCode != 0 {
+			code = errorCode
+		}
+	}
+	return &AppStateUpdateError{Code: code, Phase: AppStateUpdatePhaseServerRejected}
+}
+
+func withAppStateUpdatePhase(err error, phase AppStateUpdatePhase) error {
+	var appStateErr *AppStateUpdateError
+	if !errors.As(err, &appStateErr) {
+		return err
+	}
+	phasedErr := *appStateErr
+	phasedErr.Phase = phase
+	return &phasedErr
+}
+
+func classifyAppStateApplyFailure(err error) AppStateUpdateDetail {
+	switch {
+	case errors.Is(err, errAppStateEventCollection):
+		return AppStateUpdateDetailEventCollectionFailed
+	case errors.Is(err, appstate.ErrMismatchingLTHash):
+		return AppStateUpdateDetailMismatchingLTHash
+	case errors.Is(err, appstate.ErrKeyNotFound):
+		return AppStateUpdateDetailKeyNotFound
+	case errors.Is(err, appstate.ErrMismatchingPatchMAC):
+		return AppStateUpdateDetailMismatchingPatchMAC
+	case errors.Is(err, appstate.ErrMismatchingContentMAC):
+		return AppStateUpdateDetailMismatchingContentMAC
+	case errors.Is(err, appstate.ErrMismatchingIndexMAC):
+		return AppStateUpdateDetailMismatchingIndexMAC
+	case errors.Is(err, appstate.ErrMissingPreviousSetValueOperation):
+		return AppStateUpdateDetailMissingPreviousValue
+	default:
+		return AppStateUpdateDetailInternalDecodeError
+	}
 }
 
 func (cli *Client) MarkNotDirty(ctx context.Context, cleanType string, ts time.Time) error {
