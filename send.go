@@ -151,6 +151,9 @@ type SendRequestExtra struct {
 	// to the actual response waiting and not preparing/encrypting the message.
 	// Defaults to 75 seconds. The timeout can be disabled by using a negative value.
 	Timeout time.Duration
+	// DisableAutoRetry prevents retrying the same serialized message frame after a websocket disconnect.
+	// The caller remains responsible for deciding whether and when another send intent is safe.
+	DisableAutoRetry bool
 	// When sending media to newsletters, the Handle field returned by the file upload.
 	MediaHandle string
 
@@ -433,6 +436,10 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	}
 	resp.DebugTimings.Resp = time.Since(start)
 	if isDisconnectNode(respNode) {
+		if req.DisableAutoRetry {
+			err = &DisconnectedError{Action: "message send", Node: respNode}
+			return
+		}
 		start = time.Now()
 		respNode, err = cli.retryFrame(ctx, "message send", req.ID, data, respNode, 0)
 		resp.DebugTimings.Retry = time.Since(start)
