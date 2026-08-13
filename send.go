@@ -451,6 +451,7 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 	resp.ServerID = types.MessageServerID(ag.OptionalInt("server_id"))
 	resp.Timestamp = ag.UnixTime("t")
 	if errorCode := ag.Int("error"); errorCode != 0 {
+		cli.invalidateUserDevicesCache(to)
 		err = fmt.Errorf("%w %d", ErrServerReturnedError, errorCode)
 	}
 	expectedPHash := ag.OptionalString("phash")
@@ -465,12 +466,16 @@ func (cli *Client) SendMessage(ctx context.Context, to types.JID, message *waE2E
 		case types.BroadcastServer:
 			// TODO do something
 		case types.DefaultUserServer, types.HiddenUserServer, types.BotServer, types.HostedServer, types.HostedLIDServer:
-			cli.userDevicesCacheLock.Lock()
-			delete(cli.userDevicesCache, to)
-			cli.userDevicesCacheLock.Unlock()
+			cli.invalidateUserDevicesCache(to)
 		}
 	}
 	return
+}
+
+func (cli *Client) invalidateUserDevicesCache(jid types.JID) {
+	cli.userDevicesCacheLock.Lock()
+	delete(cli.userDevicesCache, jid)
+	cli.userDevicesCacheLock.Unlock()
 }
 
 func (cli *Client) SendPeerMessage(ctx context.Context, message *waE2E.Message) (SendResponse, error) {
